@@ -36,7 +36,7 @@ button:focus-visible,input:focus-visible{outline:2px solid var(--text);outline-o
 .row{display:flex;gap:8px;margin-top:10px}
 .row input{flex:1.4} .row button{flex:1}
 .undo{margin-top:8px;font-size:14px;color:var(--sub);background:none;border:none;padding:4px 0;text-decoration:underline}
-table{width:100%;border-collapse:collapse;font-size:14px}
+table{width:100%;border-collapse:collapse;font-size:13px}
 th,td{padding:7px 4px;text-align:right;border-bottom:1px solid var(--line)}
 th:first-child,td:first-child{text-align:left}
 th{color:var(--sub);font-weight:600}
@@ -63,9 +63,11 @@ tbody tr{cursor:pointer}
   <div id="statusSub" class="big"></div>
   <div class="grid">
     <div class="cell"><span>今日目標（三餐合計）</span><b id="goal"></b></div>
-    <div class="cell"><span>昨日累積未消除</span><b id="carry"></b></div>
+    <div class="cell"><span>前一天累積</span><b id="carry"></b></div>
     <div class="cell"><span>今日多吃</span><b id="extra"></b></div>
+    <div class="cell"><span>今日少吃</span><b id="skip"></b></div>
     <div class="cell"><span>今日已消耗</span><b id="burn"></b></div>
+    <div class="cell"><span>目前結餘</span><b id="bal"></b></div>
   </div>
 </section>
 
@@ -74,6 +76,7 @@ tbody tr{cursor:pointer}
   <input type="number" id="num" inputmode="numeric" min="1" placeholder="輸入卡路里，例如 100">
   <div class="row">
     <button class="primary" id="addEat">多吃 ＋</button>
+    <button class="primary" id="addSkip">少吃 －</button>
     <button class="primary" id="addBurn">消耗 －</button>
   </div>
   <button class="undo" id="undo">復原上一筆</button>
@@ -91,10 +94,10 @@ tbody tr{cursor:pointer}
 <section>
   <h2>紀錄</h2>
   <table>
-    <thead><tr><th>日期</th><th>多吃</th><th>消耗</th><th>待消耗</th><th>狀態</th></tr></thead>
+    <thead><tr><th>日期</th><th>多吃</th><th>少吃</th><th>消耗</th><th>結餘</th><th>狀態</th></tr></thead>
     <tbody id="hist"></tbody>
   </table>
-  <p class="foot">待消耗 ＝ 前一天累積 ＋ 多吃 − 消耗。小於等於 0 即當天完成；未完成的數字會累積到隔天。</p>
+  <p class="foot">結餘 ＝ 前一天累積 ＋ 多吃 − 少吃 − 消耗。正數＝欠（待消耗），負數＝盈餘（可吃點心）。小於等於 0 當天完成；欠和盈餘都會累積到隔天。</p>
 </section>
 
 </main>
@@ -115,10 +118,11 @@ let current = today;
 
 function dayTotals(date){
   const d = state.days[date];
-  let e=0,b=0;
-  if (d) for (const x of d.log) x.t==='e' ? e+=x.n : b+=x.n;
-  return {e,b};
+  let e=0,b=0,s=0;
+  if (d) for (const x of d.log){ if (x.t==='e') e+=x.n; else if (x.t==='s') s+=x.n; else b+=x.n; }
+  return {e,b,s};
 }
+const balText = v => v>0 ? `欠 ${v}` : v<0 ? `盈 ${-v}` : '0';
 
 // 從第一筆紀錄日算到 upTo，逐日累積
 function compute(upTo){
@@ -130,10 +134,10 @@ function compute(upTo){
   let carry = 0;
   for (let d = new Date(start); d <= end; d.setDate(d.getDate()+1)){
     const ds = fmt(d);
-    const {e,b} = dayTotals(ds);
-    const bal = carry + e - b;
-    rows.push({date:ds, carry, e, b, bal, done: bal <= 0});
-    carry = Math.max(0, bal);
+    const {e,b,s} = dayTotals(ds);
+    const bal = carry + e - s - b;
+    rows.push({date:ds, carry, e, b, s, bal, done: bal <= 0});
+    carry = bal; // 欠與盈餘都累積
   }
   return rows;
 }
@@ -144,8 +148,8 @@ function rowFor(date){
   if (r) return r;
   // 尚無紀錄的日期：承接最後一天的累積
   const last = rows[rows.length-1];
-  const carry = last ? Math.max(0, last.bal) : 0;
-  return {date, carry, e:0, b:0, bal:carry, done: carry<=0};
+  const carry = last ? last.bal : 0;
+  return {date, carry, e:0, b:0, s:0, bal:carry, done: carry<=0};
 }
 
 function render(){
@@ -153,28 +157,30 @@ function render(){
   const r = rowFor(current);
   $('date').value = current;
   $('goal').textContent = goal;
-  $('carry').textContent = r.carry;
+  $('carry').textContent = balText(r.carry);
   $('extra').textContent = r.e;
+  $('skip').textContent = r.s;
   $('burn').textContent = r.b;
+  $('bal').textContent = balText(r.bal);
   const st = $('status');
   if (r.done){
     st.textContent = '今日完成 ✓';
     st.className = 'status ok';
-    $('statusSub').textContent = r.bal < 0 ? `多消耗 ${-r.bal} 卡` : '已達標';
+    $('statusSub').textContent = r.bal < 0 ? `盈餘 ${-r.bal} 卡，可以吃點心` : '已達標';
   } else {
     st.textContent = `還差 ${r.bal} 卡`;
     st.className = 'status bad';
-    $('statusSub').textContent = '消耗完才算完成，沒做完會累積到隔天';
+    $('statusSub').textContent = '消耗或少吃補回來才算完成，沒做完會累積到隔天';
   }
   ['m1','m2','m3'].forEach((id,i)=>{ if (document.activeElement.id!==id) $(id).value = state.meals[i]; });
 
   const rows = compute(today > current ? today : current).slice().reverse();
   $('hist').innerHTML = rows.map(x =>
     `<tr data-d="${x.date}" class="${x.date===current?'sel':''}">
-      <td>${x.date.slice(5)}</td><td>${x.e}</td><td>${x.b}</td>
-      <td>${Math.max(0,x.bal)}</td>
+      <td>${x.date.slice(5)}</td><td>${x.e}</td><td>${x.s}</td><td>${x.b}</td>
+      <td>${balText(x.bal)}</td>
       <td class="${x.done?'tag-ok':'tag-bad'}">${x.done?'完成':'未完成'}</td></tr>`).join('')
-    || '<tr><td colspan="5" style="text-align:center;color:var(--sub)">尚無紀錄</td></tr>';
+    || '<tr><td colspan="6" style="text-align:center;color:var(--sub)">尚無紀錄</td></tr>';
 }
 
 function add(type){
@@ -186,6 +192,7 @@ function add(type){
 }
 
 $('addEat').onclick = () => add('e');
+$('addSkip').onclick = () => add('s');
 $('addBurn').onclick = () => add('b');
 $('num').addEventListener('keydown', e => { if (e.key==='Enter') add('e'); });
 $('undo').onclick = () => {
